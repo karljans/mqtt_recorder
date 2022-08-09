@@ -3,124 +3,13 @@
 import argparse
 import os
 import signal
-import struct
 import sys
 import time
 
-from bitstring import ConstBitStream
 from paho.mqtt import client as mqtt
 
-START_TIME = time.time()
-
-should_quit = False
-
-def sigint_handler(signal, frame):
-    global should_quit
-    should_quit = True
-    print('Cought KeyboardInterrupt, exiting')
-
-
-def mqtt_play(mqtt_file: str, mqtt_client: mqtt) -> None:
-    global should_quit
-
-    counter = 0
-
-    bitstream = ConstBitStream(filename=mqtt_file)
-    
-    try:
-        file_hdr = bitstream.read('bytes:6').decode('ascii')
-    except UnicodeDecodeError:
-        file_hdr = ''
-    
-    if file_hdr != "MQTTv1":
-        print("Error reading file: unknown file format!", file=sys.stderr)
-        sys.exit(1)
-    
-    print(file_hdr)
-    
-    msg_count = bitstream.read('uintle:64')
-    print("Total count in file:", msg_count)
-
-    while bitstream.pos < bitstream.length and not should_quit:
-
-        # Read the mqtt entry
-        mqtt_len = bitstream.read('uintle:32')
-        timestamp = bitstream.read('floatle:64')
-        mqtt_bs = ConstBitStream(bitstream.read(f'bytes:{mqtt_len - 8}'))
-
-        # Read topic name
-        topic_len = mqtt_bs.read('uintle:32')
-        topic = mqtt_bs.read(f'bytes:{topic_len}').decode('iso-8859-15')
-
-        # Read message data
-        msg_len = mqtt_bs.read('uintle:32')
-        msg = mqtt_bs.read(f'bytes:{msg_len}')
-
-        # Wait to synchronize the messages
-        while (time.time() - START_TIME < timestamp) and not should_quit:
-            pass
-
-        counter += 1
-        print(f"{round(counter * 100 / msg_count, 2)} %")
-
-        # Publish the message
-        mqtt_client.publish(topic, msg)
-
-    should_quit = True
-
-
-def message_callback(client: mqtt, userdata: dict, message: mqtt.MQTTMessage) -> None:
-    """
-    Callback for MQTT messages
-
-    Args:
-        client (mqtt): Mqtt client instance
-        userdata (dict): User data passed to MQTT
-        message (mqtt.MQTTMessage): Received messsage
-    """
-    
-    # Encode topic name
-    topic_bs = bytearray(message.topic, 'iso-8859-15')
-
-    # Encode message
-    msg_bs = bytearray(message.payload)
-
-    # Calculate legths of different message components
-    topic_len = struct.pack('<I', len(topic_bs))
-    msg_len = struct.pack('<I', len(msg_bs))
-
-    # Build MQTT message entry
-    mqtt_bytes = b"".join([topic_len, topic_bs, msg_len, msg_bs])
-    timestamp = struct.pack('<d', time.time() - START_TIME)
-
-    mqtt_entry = b"".join([timestamp, mqtt_bytes])
-    mqtt_len = struct.pack('<I', len(mqtt_entry))
-
-    # MQTT message entry header
-    file_data = b"".join([mqtt_len, mqtt_entry])
-
-    # Save the MQTT entry
-    with open(userdata['file'], 'ab') as fp:
-        fp.write(file_data)
-
-    # Append count in user data
-    userdata['count'] += 1
-
-
-def mqtt_on_connect_callback(client: mqtt, userdata: dict, flags: dict, rc) -> None:
-    """
-    Callback that is run when connection to the MQTT broker is made
-
-    Args:
-        client (_type_): Mqtt client instance (not used)
-        userdata (_type_): User data passed to MQTT (not used)
-        flags (_type_): Response flags sent by the broker
-        rc (_type_): Return code given by the broker connection
-    """
-    if rc == 0:
-        print("Connected to MQTT Broker!")
-    else:
-        print("Failed to connect, return code %d\n", mqtt.connack_string(rc))
+from mqtt_recorder import MqttRecorder
+from mqtt_player import MqttPlayer
 
 
 def arg_parser(arguments_passed: bool) -> argparse:
@@ -129,11 +18,11 @@ def arg_parser(arguments_passed: bool) -> argparse:
 
     Args:
         arguments_passed (bool): True if any arguments were passed, 
-                                 False if no arguments were passed
+                                False if no arguments were passed
 
     Returns:
         argparse: Argparse object containing info regarding the passed arguments
-                  None if no arguments were passed
+                None if no arguments were passed
     """
 
     parser = argparse.ArgumentParser(
@@ -158,14 +47,13 @@ def arg_parser(arguments_passed: bool) -> argparse:
         '-P', '--passw', help='Provides a password for MQTT connection')
 
     topic_group = parser.add_argument_group("MQTT topics")
-    topic_group.add_argument('-t', '--topics', default='#',
-                             help='Comma separated list of MQTT topics to subscribe.'
-                             'Defaults to all topics (#)')
+    topic_group.add_argument('-t', '--topics', action='append', nargs='+',
+                             help='MQTT topic to subscribe to. Can be used multiple times')
 
-    topic_group.add_argument('-T', '--no-topics',
-                             help='Comma separated list of MQTT topics to filter out')
+    topic_group.add_argument('-T', '--no-topics', action='append', nargs='+',
+                             help='MQTT topics to filter out. Can be used multiple times')
 
-    parser.add_argument('-nh', '--help', action='help', default=argparse.SUPPRESS,
+    parser.add_argument('--help', action='help', default=argparse.SUPPRESS,
                         help='Show this help message and exit.')
 
     args = parser.parse_args()
@@ -176,85 +64,115 @@ def arg_parser(arguments_passed: bool) -> argparse:
 
     return args
 
+class App:
+    def __init__(self, args) -> None:
+        self.args = args
 
-def record(mqtt_file: str, mqtt_client: mqtt, userdata) -> None:
-    global should_quit
+        self.mqtt_class = None
 
-    # Write file header
-    with open(mqtt_file, 'wb') as fp:
-        # Write header text that identifies the file        
-        fp.write("MQTTv1".encode('ascii'))
-        
-        # Reserve 8 bytes for number of messages (will be filled later)
-        fp.write(struct.pack('<Q', 0))
+        # Register KeyboardInterrupt handler
+        signal.signal( signal.SIGINT, lambda signal, frame: self._sigint_handler() )
 
-    mqtt_client.on_message = message_callback
-    mqtt_client.subscribe(args.topics)  # TODO: support multiple topics
-    mqtt_client.loop_start()
+    def _sigint_handler(self):
+        print('Cought KeyboardInterrupt, exiting')
 
-    # Block until KeyboardInterrupt
-    while not should_quit:
-        pass
+        if self.mqtt_class is None:
+            print('ERROR: MQTT class not initialized', file=sys.stderr)
 
-    print("exiting")
-    if args.rec:
-        with open(mqtt_file, 'r+b') as fp:
-            
-            # 
-            fp.seek(6)
-            fp.write(struct.pack('<Q', userdata['count']))
+        self.mqtt_class.stop()
 
-        print(f"Logged {userdata['count']} messages")
+    def _flatten_list(self, src: list) -> list:
+        return [item for sublist in src for item in sublist]
 
+    def _mqtt_on_connect_callback(self, client: mqtt, userdata: dict, flags: dict, rc: int) -> None:
+        """
+        Callback that is run when connection to the MQTT broker is made
 
-def main(args: argparse) -> int:
+        Args:
+            client mqtt: Mqtt client instance (not used)
+            userdata dict: User data passed to MQTT (not used)
+            flags flags: Response flags sent by the broker (not used)
+            rc int: Return code given by the broker connection
+        """
+        if rc == 0:
+            print("Connected to MQTT Broker!")
+        else:
+            print("Failed to connect, return code %d\n", mqtt.connack_string(rc))
 
-    global should_quit
-    mqtt_file = None
+    def main(self) -> int:
 
-    if args.play:
-        mqtt_file = os.path.abspath(os.path.expanduser(args.play))
+        mqtt_file = None
 
-    elif args.rec:
-        mqtt_file = os.path.abspath(os.path.expanduser(args.rec))
+        # Argument processing
+        if self.args.play:
+            mqtt_file = os.path.abspath(os.path.expanduser(args.play))
 
-    if mqtt_file == None:
-        print("File is None. This should never happen", file=sys.stderr)
-        return 1
+        elif self.args.rec:
+            mqtt_file = os.path.abspath(os.path.expanduser(args.rec))
 
-    # MQTT client
-    userdata = {
-        'file': mqtt_file,
-        'count': 0
-    }
-    mqtt_client = mqtt.Client(f'MQTT-recorder', userdata=userdata)
+        if mqtt_file == None:
+            print("File is None. This should never happen", file=sys.stderr)
+            return 1
 
-    # Set up MQTT connection
-    if args.user and args.passw:
-        mqtt_client.username_pw_set(args.user, args.passw)
+        mqtt_client = mqtt.Client(f'MQTT-bag')
 
-    mqtt_client.connect(args.host, args.port)
-    mqtt_client.on_connect = mqtt_on_connect_callback
+        # Set up MQTT connection
+        if self.args.user and self.args.passw:
+            mqtt_client.username_pw_set(args.user, args.passw)
 
-    # Register KeyboardInterrupt handler
-    signal.signal(signal.SIGINT, sigint_handler)
+        mqtt_client.connect(args.host, args.port)
+        mqtt_client.on_connect = self._mqtt_on_connect_callback
 
-    if args.rec:
-        record(mqtt_file, mqtt_client, userdata)
+        # Process the list of specified topics
+        no_topics_flat = self._flatten_list(
+            self.args.no_topics) if self.args.no_topics else []
 
-    elif args.play:
-        mqtt_play(mqtt_file, mqtt_client)
+        topics_flat = []
 
-    return 0
+        # Default if no topics are specified
+        if not args.topics:
+            if args.rec:
+                print("Note: No topics specified, subscribing to all ('#')")
+                topics_flat.append('#')
+
+        # Only keep the topics that are not in args.no_topics
+        else:
+            for topic in self.args.topics:
+                if topic[0] not in no_topics_flat:
+                    topics_flat.append(topic[0])
+
+        # We are recording
+        if self.args.rec:
+            # If the user used the no-topics flag to remove all
+            # subcritions, including to '#'.
+            if len(topics_flat) == 0:
+                print("Error! No topics specified")
+                return 1
+
+            self.mqtt_class = MqttRecorder(
+                mqtt_file, mqtt_client, topics_flat)
+
+        # We are playing
+        elif args.play:
+            self.mqtt_class = MqttPlayer(
+                mqtt_file, topics_flat, no_topics_flat, mqtt_client)
+
+        # Finally run MQTT record / play
+        ret = self.mqtt_class.run()
+
+        return ret
 
 
 if __name__ == '__main__':
-    ret = 0
 
+    # Parse arguments
     arguments_passed = len(sys.argv) > 1
     args = arg_parser(arguments_passed)
 
+    # Run the application
+    ret = 0
     if args:
-        ret = main(args)
+        app = App(args)
+        ret = app.main()
 
     sys.exit(ret)
