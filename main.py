@@ -4,12 +4,11 @@ import argparse
 import os
 import signal
 import sys
-import time
 
 from paho.mqtt import client as mqtt
 
-from mqtt_recorder import MqttRecorder
-from mqtt_player import MqttPlayer
+from src.mqtt_player import MqttPlayer
+from src.mqtt_recorder import MqttRecorder
 
 
 def arg_parser(arguments_passed: bool) -> argparse:
@@ -29,10 +28,8 @@ def arg_parser(arguments_passed: bool) -> argparse:
         description='MQTT message recorder and player', add_help=False)
 
     action_group = parser.add_mutually_exclusive_group(required=True)
-    action_group.add_argument(
-        '--rec', help='Record MQTT traffic into this file')
-    action_group.add_argument(
-        '--play', help='Play MQTT traffic from this file')
+    action_group.add_argument('--rec', help='Record MQTT traffic into this file')
+    action_group.add_argument('--play', help='Play MQTT traffic from this file')
 
     broker_group = parser.add_argument_group("MQTT Broker information")
     broker_group.add_argument('-h', '--host', default='127.0.0.1',
@@ -41,10 +38,8 @@ def arg_parser(arguments_passed: bool) -> argparse:
     broker_group.add_argument('-p', '--port', type=int, default=1883,
                               help='Port the MQTT broker is running at. Defaults to 1883')
 
-    broker_group.add_argument(
-        '-u', '--user', help='Provides a username for MQTT connection')
-    broker_group.add_argument(
-        '-P', '--passw', help='Provides a password for MQTT connection')
+    broker_group.add_argument('-u', '--user', help='Provides a username for MQTT connection')
+    broker_group.add_argument('-P', '--passw', help='Provides a password for MQTT connection')
 
     topic_group = parser.add_argument_group("MQTT topics")
     topic_group.add_argument('-t', '--topics', action='append', nargs='+',

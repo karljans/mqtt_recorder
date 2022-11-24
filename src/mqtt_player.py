@@ -1,6 +1,6 @@
-from pyclbr import Function
 import sys
 import time
+from pyclbr import Function
 
 from bitstring import ConstBitStream
 from paho.mqtt import client as mqtt
