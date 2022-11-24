@@ -12,7 +12,7 @@ class MqttPlayer:
                  invalid_topics: list, mqtt_client: mqtt,
                  publish: bool = True, callback: Function = None,
                  cb_user_data: object = None,
-                 quiet: bool = False) -> None:
+                 quiet: bool = False, info_mode: bool = False) -> None:
         """
         MQTT file player. Reads saved MQTT stream and publishes the contents through an MQTT broker
 
@@ -28,8 +28,12 @@ class MqttPlayer:
             cb_user_data (object, optional): User data to pass to the callback function, optional. 
                                              Defaults to None.
             quiet (bool): If True, the progress messages are not printed
+            info_mode(bool): If True, the file is parsed to extract all topics, no actual reading
+                             and publishing of the messages is done
 
         """
+
+        self.info_mode = info_mode
 
         self.mqtt_file = mqtt_file
         self.valid_topics = valid_topics
@@ -114,11 +118,19 @@ class MqttPlayer:
         msg_count = bitstream.read('uintle:64')
         print("Total number of messages in file:", msg_count)
 
+        # Duration of the recording
         duration = bitstream.read('floatle:64')
         duration_str = str(datetime.timedelta(seconds=duration))
         print(f"Total duration of the recording: {duration_str}")
 
-        print("\nPlaying", self.mqtt_file, end='\n\n')
+        if self.info_mode:
+            print("\nAnalyzing file", self.mqtt_file, end='\n')
+        else:
+            print("\nPlaying", self.mqtt_file, end='\n\n')
+
+        topic_list = []
+
+        # Parse the file
         while bitstream.pos < bitstream.length and not self.terminate:
 
             # Read the mqtt entry
@@ -131,35 +143,42 @@ class MqttPlayer:
             topic_len = mqtt_bs.read('uintle:32')
             topic = mqtt_bs.read(f'bytes:{topic_len}').decode('iso-8859-15')
 
+            if self.info_mode and topic not in topic_list:
+                topic_list.append(topic)
+
             # Read message data
             msg_len = mqtt_bs.read('uintle:32')
             msg = mqtt_bs.read(f'bytes:{msg_len}')
 
-            if self._is_topic_valid(topic):
-                # Wait to synchronize the messages
-                curr_time = time.time() - self.start_time
+            if not self.info_mode:
+                
+                # Only publish topics the user wants to publish
+                if self._is_topic_valid(topic):
 
-                while (curr_time < timestamp) and not self.terminate:
                     curr_time = time.time() - self.start_time
 
-                    if not self.quiet:
-                        time_str = str(datetime.timedelta(seconds=curr_time))
-                        print(f"{time_str} of {duration_str} ({round(curr_time * 100 / duration, 2):.2f} %)", end='\r')
+                    # For message time synchronization
+                    while (curr_time < timestamp) and not self.terminate:
+                        curr_time = time.time() - self.start_time
 
-                if self.terminate:
-                    print("\nCaught interrupt signal, exiting")
-                    return 0
+                        if not self.quiet:
+                            time_str = str(datetime.timedelta(seconds=curr_time))
+                            print(f"{time_str} of {duration_str} ({round(curr_time * 100 / duration, 2):.2f} %)", end='\r')
 
-                counter += 1
-                # print(f"Message {counter} of {msg_count} ({round(counter * 100 / msg_count, 2)} %)", end='\r')
+                    counter += 1
 
-                # Publish the message
-                if self.publish:
-                    self.mqtt_client.publish(topic, msg)
+                    # Publish the message
+                    if self.publish:
+                        self.mqtt_client.publish(topic, msg)
 
-                # Run the custom callback function, if specified
-                if self.callback is not None:
-                    self.callback(msg_count, counter, timestamp, topic, msg, self.cb_user_data)
+                    # Run the custom callback function, if specified
+                    if self.callback is not None:
+                        self.callback(msg_count, counter, timestamp, topic, msg, self.cb_user_data)
+
+        if self.info_mode:
+            print('Topics in file:')
+            for topic in topic_list:
+                print("\t", topic)
 
         print()
         print("End of file")

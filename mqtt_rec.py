@@ -30,6 +30,7 @@ def arg_parser(arguments_passed: bool) -> argparse:
     action_group = parser.add_mutually_exclusive_group(required=True)
     action_group.add_argument('--rec', help='Record MQTT traffic into this file')
     action_group.add_argument('--play', help='Play MQTT traffic from this file')
+    action_group.add_argument('--info', help='Show info about data stored in this file')
 
     broker_group = parser.add_argument_group("MQTT Broker information")
     broker_group.add_argument('-h', '--host', default='127.0.0.1',
@@ -52,7 +53,7 @@ def arg_parser(arguments_passed: bool) -> argparse:
     control_group.add_argument('-l', '--loop', action='store_true',
                                help='Continue playing the file from the beginning once the end of reached, '
                                     'instead of exiting the program')
-                                    
+
     control_group.add_argument('-q', '--quiet', action='store_true',
                                help='Quiet mode, does not print out progress info. '
                                     'Useful for running as a background process')
@@ -140,17 +141,27 @@ class App:
 
         # Argument processing
         if self.args.play:
-            mqtt_file = os.path.abspath(os.path.expanduser(args.play))
+            mqtt_file = args.play
 
         elif self.args.rec:
-            mqtt_file = os.path.abspath(os.path.expanduser(args.rec))
+            mqtt_file = args.rec
+
+        elif self.args.info:
+            mqtt_file = args.info
+
+        else:
+            print("No mode selected. This should never happen", file=sys.stderr)
+            return 1
 
         if mqtt_file == None:
             print("File is None. This should never happen", file=sys.stderr)
             return 1
 
-        if self.args.loop and self.args.rec:
-            print("Warning: --loop flag cannot be used in record mode. Ignoring --loop flag", 
+        # Convert file path absolute path
+        mqtt_file = os.path.abspath(os.path.expanduser(mqtt_file))
+
+        if self.args.loop and not self.args.play:
+            print("Warning: --loop flag cannot be used in record mode. Ignoring the --loop flag", 
                   file=sys.stderr)
 
         mqtt_client = mqtt.Client(f'MQTT-bag')
@@ -193,9 +204,16 @@ class App:
 
         # We are playing
         elif args.play:
+
             self.mqtt_class = MqttPlayer(
                 mqtt_file, topics_flat, no_topics_flat, 
                 mqtt_client, quiet=args.quiet)
+
+        elif args.info:
+
+            self.mqtt_class = MqttPlayer(
+                mqtt_file, topics_flat, no_topics_flat, 
+                mqtt_client, quiet=args.quiet, info_mode=True)
 
         # Finally run MQTT record / play
 
