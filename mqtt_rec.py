@@ -101,7 +101,6 @@ class App:
             exit(1)
 
         self.terminate = True
-        self.mqtt_class.stop()
 
     def _flatten_list(self, src: list) -> list:
         """
@@ -198,13 +197,13 @@ class App:
         # We are recording
         if self.args.rec:
             # If the user used the no-topics flag to remove all
-            # subcritions, including to '#'.
+            # subscriptions, including to '#'.
             if len(topics_flat) == 0:
                 print("Error! No topics specified")
                 return 1
 
-            self.mqtt_class = MqttRecorder(
-                mqtt_file, mqtt_client, topics_flat)
+            self.mqtt_class = MqttRecorder(mqtt_client, topics_flat, quiet=args.quiet)
+            self.mqtt_class.reset(mqtt_file)
 
         # We are playing
         elif args.play:
@@ -220,15 +219,26 @@ class App:
                 mqtt_client, quiet=args.quiet, info_mode=True)
 
         # Finally run MQTT record / play
-
         ret = 0
 
         if args.play and args.loop:
+            
             while (not self.terminate and ret == 0):
                 self.mqtt_class.reset()
                 ret = self.mqtt_class.run()
+                
+        # Recording
+        elif args.rec:
+            # Wait until we need to quit
+            while not self.terminate:
+                pass
+            
+        # Play without loop / info
         else:
             ret = self.mqtt_class.run()
+            
+        # Finalize recording / playback
+        self.mqtt_class.stop()
 
         return ret
 
