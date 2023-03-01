@@ -48,6 +48,21 @@ class MqttPlayer:
         self.terminate = False
         self.first_msg = True
         self.start_time = 0
+        
+    def _mqtt_on_connect_callback(self, client: mqtt, userdata: dict, flags: dict, rc: int) -> None:
+        """
+        Callback that is run when connection to the MQTT broker is made
+
+        Args:
+            client mqtt: Mqtt client instance (not used)
+            userdata dict: User data passed to MQTT (not used)
+            flags flags: Response flags sent by the broker (not used)
+            rc int: Return code given by the broker connection
+        """
+        if rc == 0:
+            print("Connected to MQTT Broker!")
+        else:
+            print(f"Failed to connect, return code {mqtt.connack_string(rc)}")
 
     def _is_topic_valid(self, topic: str) -> bool:
         """

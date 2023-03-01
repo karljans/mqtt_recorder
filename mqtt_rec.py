@@ -84,6 +84,11 @@ class App:
         self.args = args
         self.mqtt_class = None
         self.terminate = False
+        self.topics = []
+        
+        # MQTT Client
+        random_str = ''.join(random.choice(string.ascii_letters) for _ in range(32))
+        self.mqtt_client = mqtt.Client(f'MQTT-bag-{random_str}')
 
         # Register KeyboardInterrupt handler
         signal.signal(signal.SIGINT, lambda signal, frame: self._signal_handler())
@@ -102,6 +107,28 @@ class App:
 
         self.terminate = True
 
+    def _mqtt_on_connect_callback(self, client: mqtt, userdata: dict, flags: dict, rc: int) -> None:
+        """
+        Callback that is run when connection to the MQTT broker is made
+
+        Args:
+            client mqtt: Mqtt client instance (not used)
+            userdata dict: User data passed to MQTT (not used)
+            flags flags: Response flags sent by the broker (not used)
+            rc int: Return code given by the broker connection
+        """
+        if rc == 0:
+            
+            if not self.args.quiet:
+                print("Connected to MQTT Broker!")
+            
+            # We need to resubscribe to all topics when we (re)connect
+            for topic in self.topics:
+                self.mqtt_client.subscribe(topic)
+                
+        else:
+            print(f"Failed to connect, return code {mqtt.connack_string(rc)}")
+
     def _flatten_list(self, src: list) -> list:
         """
         Reads a list of lists and converts it into a single list
@@ -114,21 +141,6 @@ class App:
             list: Flattened list
         """
         return [item for sublist in src for item in sublist]
-
-    def _mqtt_on_connect_callback(self, client: mqtt, userdata: dict, flags: dict, rc: int) -> None:
-        """
-        Callback that is run when connection to the MQTT broker is made
-
-        Args:
-            client mqtt: Mqtt client instance (not used)
-            userdata dict: User data passed to MQTT (not used)
-            flags flags: Response flags sent by the broker (not used)
-            rc int: Return code given by the broker connection
-        """
-        if rc == 0:
-            print("Connected to MQTT Broker!")
-        else:
-            print(f"Failed to connect, return code {mqtt.connack_string(rc)}")
 
     def main(self) -> int:
         """
@@ -165,58 +177,52 @@ class App:
             print("Warning: --loop flag cannot be used in record mode. Ignoring the --loop flag", 
                   file=sys.stderr)
 
-
-        random_str = ''.join(random.choice(string.ascii_letters) for _ in range(32))
-        mqtt_client = mqtt.Client(f'MQTT-bag-{random_str}')
-
         # Set up MQTT connection
         if self.args.user and self.args.passw:
-            mqtt_client.username_pw_set(args.user, args.passw)
+            self.mqtt_client.username_pw_set(args.user, args.passw)
 
-        mqtt_client.connect(args.host, args.port)
-        mqtt_client.on_connect = self._mqtt_on_connect_callback
+        self.mqtt_client.on_connect = self._mqtt_on_connect_callback
+        self.mqtt_client.connect(args.host, args.port)
 
         # Process the list of specified topics
         no_topics_flat = self._flatten_list(
             self.args.no_topics) if self.args.no_topics else []
 
-        topics_flat = []
-
         # Default if no topics are specified
         if not args.topics:
             if args.rec:
                 print("Note: No topics specified, subscribing to all ('#')")
-                topics_flat.append('#')
+                self.topics.append('#')
 
         # Only keep the topics that are not in args.no_topics
         else:
             for topic in self.args.topics:
                 if topic[0] not in no_topics_flat:
-                    topics_flat.append(topic[0])
+                    self.topics.append(topic[0])
 
         # We are recording
         if self.args.rec:
             # If the user used the no-topics flag to remove all
             # subscriptions, including to '#'.
-            if len(topics_flat) == 0:
+            if len(self.topics) == 0:
                 print("Error! No topics specified")
                 return 1
 
-            self.mqtt_class = MqttRecorder(mqtt_client, topics_flat, quiet=args.quiet)
+            self.mqtt_class = MqttRecorder(self.mqtt_client, self.topics, quiet=args.quiet)
             self.mqtt_class.reset(mqtt_file)
 
         # We are playing
         elif args.play:
 
             self.mqtt_class = MqttPlayer(
-                mqtt_file, topics_flat, no_topics_flat, 
-                mqtt_client, quiet=args.quiet)
+                mqtt_file, self.topics, no_topics_flat, 
+                self.mqtt_client, quiet=args.quiet)
 
         elif args.info:
 
             self.mqtt_class = MqttPlayer(
-                mqtt_file, topics_flat, no_topics_flat, 
-                mqtt_client, quiet=args.quiet, info_mode=True)
+                mqtt_file, self.topics, no_topics_flat, 
+                self.mqtt_client, quiet=args.quiet, info_mode=True)
 
         # Finally run MQTT record / play
         ret = 0

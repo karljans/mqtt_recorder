@@ -27,7 +27,7 @@ class MqttRecorder:
         self.count = 0
 
         self.terminate = False
-        
+       
         
     def message_callback(self, client: mqtt, userdata: dict, 
                          message: mqtt.MQTTMessage) -> None:
@@ -113,9 +113,6 @@ class MqttRecorder:
             exit(1)
 
         self.mqtt_client.on_message = self.message_callback
-
-        for topic in self.topics:
-            self.mqtt_client.subscribe(topic)
 
         self.mqtt_client.loop_start()
 
