@@ -10,14 +10,11 @@ Currently only unencrypted MQTT communication is supported, however, the tool ca
 
 This tool needs **Python 3.7** or newer to run, as it uses some language features that are not available in older versions of the language.
 
-It requires the following third party packages:
+To install the required dependencies, run the following command:
 
-* `paho-mqtt`
-* `bitstring`
-
-The packages can be installed using pip:
-
-`pip3 install paho-mqtt bitstring`
+``` bash
+pip install -r requirements.txt
+```
 
 ## Usage
 
