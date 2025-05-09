@@ -168,7 +168,7 @@ class App:
 
 
         random_str = ''.join(random.choice(string.ascii_letters) for _ in range(32))
-        mqtt_client = mqtt.Client(f'MQTT-bag-{random_str}')
+        mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, f'MQTT-bag-{random_str}')
 
         # Set up MQTT connection
         if self.args.user and self.args.passw:
